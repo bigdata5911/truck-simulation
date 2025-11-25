@@ -41,7 +41,7 @@ class EventResponse(BaseModel):
     end_time: Optional[datetime]
     latitude: float
     longitude: float
-    metadata: Optional[dict]
+    event_metadata: Optional[dict]
     created_at: datetime
     
     class Config:

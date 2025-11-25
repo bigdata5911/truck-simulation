@@ -56,7 +56,7 @@ def create_or_update_event(
         start_time=timestamp,
         latitude=latitude,
         longitude=longitude,
-        metadata=metadata
+        event_metadata=metadata
     )
     db.add(event)
     db.commit()

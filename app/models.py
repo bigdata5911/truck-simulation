@@ -34,7 +34,7 @@ class Event(Base):
     end_time = Column(DateTime(timezone=True), nullable=True)
     latitude = Column(Numeric(10, 7))
     longitude = Column(Numeric(10, 7))
-    metadata = Column(JSON, nullable=True)
+    event_metadata = Column(JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     # Relationships
