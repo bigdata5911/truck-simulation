@@ -102,41 +102,49 @@ async def samsara_webhook(
             # Send SMS directly if driver has phone number (for testing/debugging)
             # This bypasses SQS for immediate testing
             if driver and driver.phone:
-                sms_body = (
-                    f"DriverBuddy: Vehicle {payload.vehicleId} stopped at "
-                    f"{payload.latitude:.4f},{payload.longitude:.4f} at {payload.timestamp.isoformat()}. "
-                    f"Reply to this SMS."
-                )
-                print(f"Attempting to send SMS directly to {driver.phone}...")
-                
-                # Build status callback URL for delivery status updates
-                # This helps track actual delivery, especially for virtual-to-virtual messaging
-                base_url = str(request.base_url).rstrip('/')
-                status_callback_url = f"{base_url}/webhook/twilio/status"
-                
-                sms_success, twilio_sid = send_sms(driver.phone, sms_body, status_callback_url=status_callback_url)
-                
-                if sms_success and twilio_sid:
-                    # Create message record
-                    # Note: For virtual-to-virtual, status may show as "failed" on sender side
-                    # but message is still delivered. Status callback will update actual status.
-                    message = Message(
-                        event_id=event.id,
-                        driver_id=driver.id,
-                        direction="outbound",
-                        body=sms_body,
-                        from_phone=settings.TWILIO_NUMBER,
-                        to_phone=driver.phone,
-                        status="sent",  # Initial status, will be updated by status callback
-                        twilio_sid=twilio_sid
+                try:
+                    sms_body = (
+                        f"DriverBuddy: Vehicle {payload.vehicleId} stopped at "
+                        f"{payload.latitude:.4f},{payload.longitude:.4f} at {payload.timestamp.isoformat()}. "
+                        f"Reply to this SMS."
                     )
-                    db.add(message)
-                    db.commit()
-                    print(f"✓ SMS sent directly and message record created (SID: {twilio_sid})")
-                    print(f"  Status callback URL: {status_callback_url}")
-                    print(f"  Note: For virtual-to-virtual numbers, delivery status may differ on each side")
-                else:
-                    print(f"✗ Failed to send SMS directly. Will try via SQS queue.")
+                    print(f"Attempting to send SMS directly to {driver.phone}...")
+                    print(f"  From: {settings.TWILIO_NUMBER}")
+                    print(f"  To: {driver.phone}")
+                    
+                    # Send SMS exactly like the test script (no status callback for now)
+                    # Status callbacks can be added later once basic SMS is working
+                    # This matches the test script behavior exactly
+                    sms_success, twilio_sid = send_sms(driver.phone, sms_body)
+                    
+                    if sms_success and twilio_sid:
+                        # Create message record
+                        # Note: For virtual-to-virtual, status may show as "failed" on sender side
+                        # but message is still delivered. Status callback will update actual status.
+                        message = Message(
+                            event_id=event.id,
+                            driver_id=driver.id,
+                            direction="outbound",
+                            body=sms_body,
+                            from_phone=settings.TWILIO_NUMBER,
+                            to_phone=driver.phone,
+                            status="sent",  # Initial status, will be updated by status callback
+                            twilio_sid=twilio_sid
+                        )
+                        db.add(message)
+                        db.commit()
+                        print(f"✓ SMS sent directly and message record created (SID: {twilio_sid})")
+                        print(f"  Note: For virtual-to-virtual numbers, delivery status may differ on each side")
+                    else:
+                        print(f"✗ Failed to send SMS directly. Will try via SQS queue.")
+                        print(f"  Check application logs above for detailed error messages")
+                
+                except Exception as sms_error:
+                    # Catch any exceptions during SMS sending to prevent webhook from failing
+                    print(f"✗ Exception while sending SMS: {sms_error}")
+                    import traceback
+                    print(f"  Traceback: {traceback.format_exc()}")
+                    print(f"  Webhook will continue, but SMS was not sent")
             
             # Enqueue event to SQS for processing (SMS sending via worker)
             # This is the production path, but we also send directly above for testing

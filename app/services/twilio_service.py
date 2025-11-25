@@ -59,10 +59,16 @@ def send_sms(to_phone: str, message_body: str, status_callback_url: Optional[str
             "to": to_phone
         }
         
-        # Add status callback if provided
+        # Add status callback if provided and valid
         # This allows us to track delivery status updates
+        # Note: Invalid callback URLs can cause Twilio to reject the message
         if status_callback_url:
-            message_params["status_callback"] = status_callback_url
+            # Validate that it's a proper HTTP/HTTPS URL
+            if status_callback_url.startswith(('http://', 'https://')):
+                message_params["status_callback"] = status_callback_url
+                print(f"  Status callback URL: {status_callback_url}")
+            else:
+                print(f"  Warning: Invalid status callback URL format, skipping: {status_callback_url}")
         
         message = client.messages.create(**message_params)
         
