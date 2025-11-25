@@ -108,10 +108,18 @@ async def samsara_webhook(
                     f"Reply to this SMS."
                 )
                 print(f"Attempting to send SMS directly to {driver.phone}...")
-                sms_success, twilio_sid = send_sms(driver.phone, sms_body)
                 
-                if sms_success:
+                # Build status callback URL for delivery status updates
+                # This helps track actual delivery, especially for virtual-to-virtual messaging
+                base_url = str(request.base_url).rstrip('/')
+                status_callback_url = f"{base_url}/webhook/twilio/status"
+                
+                sms_success, twilio_sid = send_sms(driver.phone, sms_body, status_callback_url=status_callback_url)
+                
+                if sms_success and twilio_sid:
                     # Create message record
+                    # Note: For virtual-to-virtual, status may show as "failed" on sender side
+                    # but message is still delivered. Status callback will update actual status.
                     message = Message(
                         event_id=event.id,
                         driver_id=driver.id,
@@ -119,12 +127,14 @@ async def samsara_webhook(
                         body=sms_body,
                         from_phone=settings.TWILIO_NUMBER,
                         to_phone=driver.phone,
-                        status="sent",
+                        status="sent",  # Initial status, will be updated by status callback
                         twilio_sid=twilio_sid
                     )
                     db.add(message)
                     db.commit()
-                    print(f"✓ SMS sent directly and message record created")
+                    print(f"✓ SMS sent directly and message record created (SID: {twilio_sid})")
+                    print(f"  Status callback URL: {status_callback_url}")
+                    print(f"  Note: For virtual-to-virtual numbers, delivery status may differ on each side")
                 else:
                     print(f"✗ Failed to send SMS directly. Will try via SQS queue.")
             
@@ -244,6 +254,85 @@ async def twilio_inbound_webhook(
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Error processing Twilio webhook: {str(e)}")
+
+
+@router.post("/twilio/status")
+async def twilio_status_webhook(
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    """
+    Receive Twilio status callback webhook
+    
+    Updates message status based on Twilio delivery status
+    Handles virtual-to-virtual messaging where status may show differently
+    """
+    try:
+        # Get form data from Twilio
+        form_data = await request.form()
+        
+        message_sid = form_data.get("MessageSid")
+        message_status = form_data.get("MessageStatus")  # queued, sent, delivered, failed, undelivered
+        error_code = form_data.get("ErrorCode")
+        error_message = form_data.get("ErrorMessage")
+        
+        if not message_sid:
+            return {"status": "error", "message": "MessageSid missing"}
+        
+        # Find message by Twilio SID
+        message = db.query(Message).filter(Message.twilio_sid == message_sid).first()
+        
+        if not message:
+            print(f"Status update for unknown message SID: {message_sid}")
+            return {"status": "ok", "message": "Message not found in database"}
+        
+        # Map Twilio status to our status
+        # For virtual-to-virtual: "failed" or "undelivered" on sender side 
+        # may still mean delivered on recipient side
+        status_mapping = {
+            "queued": "pending",
+            "sending": "pending",
+            "sent": "sent",
+            "delivered": "delivered",
+            "failed": "failed",
+            "undelivered": "undelivered",
+            "receiving": "pending",
+            "received": "received"
+        }
+        
+        # Update status
+        new_status = status_mapping.get(message_status.lower(), message.status)
+        
+        # Special handling for virtual-to-virtual messaging:
+        # If we get a status update (even "failed" or "undelivered"), 
+        # it means Twilio processed the message
+        # For virtual numbers, "failed" on sender side doesn't mean recipient didn't get it
+        if message_status.lower() in ["failed", "undelivered"]:
+            # Check if this is virtual-to-virtual (both numbers are Twilio numbers)
+            # In this case, we might want to mark as "sent" if we have a message SID
+            # because virtual-to-virtual can show different statuses on each side
+            if message.twilio_sid:
+                print(f"Status '{message_status}' for virtual-to-virtual message {message_sid}")
+                print(f"  Note: Virtual-to-virtual messages may show 'failed' on sender side")
+                print(f"  but still be delivered on recipient side. Current status: {new_status}")
+                # Keep the status as is, but log the note
+        
+        message.status = new_status
+        
+        # Log error details if present
+        if error_code:
+            print(f"Twilio error for message {message_sid}: {error_code} - {error_message}")
+        
+        db.commit()
+        
+        print(f"Updated message {message_sid} status to: {new_status}")
+        
+        return {"status": "ok"}
+    
+    except Exception as e:
+        db.rollback()
+        print(f"Error processing Twilio status webhook: {e}")
+        return {"status": "error", "message": str(e)}
 
 
 def validate_twilio_signature(url: str, form_data: dict, signature: str) -> bool:

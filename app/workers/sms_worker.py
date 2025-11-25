@@ -40,12 +40,17 @@ async def process_sms_message(message_body: str):
                 return
             
             # Send SMS via Twilio
+            # Note: For status callbacks, we'd need the request URL, but in worker context
+            # we don't have it. Status callbacks are better handled at webhook level.
+            # For now, we'll rely on Twilio's initial response.
             success, twilio_sid = send_sms(to_phone, body)
             
             if success and twilio_sid:
                 message.twilio_sid = twilio_sid
                 message.status = "sent"
                 print(f"SMS sent successfully: {twilio_sid}")
+                print(f"  Note: For virtual-to-virtual numbers, status may show differently on each side")
+                print(f"  Message was accepted by Twilio (has SID), delivery status may vary")
             else:
                 message.status = "failed"
                 print(f"Failed to send SMS to {to_phone}")

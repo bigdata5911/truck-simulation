@@ -23,16 +23,21 @@ def get_twilio_client() -> Optional[Client]:
     return Client(account_sid, auth_token)
 
 
-def send_sms(to_phone: str, message_body: str) -> Tuple[bool, Optional[str]]:
+def send_sms(to_phone: str, message_body: str, status_callback_url: Optional[str] = None) -> Tuple[bool, Optional[str]]:
     """
     Send SMS via Twilio
     
     Args:
         to_phone: Recipient phone number (E.164 format)
         message_body: SMS message text
+        status_callback_url: Optional URL for status callbacks (for delivery status updates)
     
     Returns:
         Tuple of (success: bool, message_sid: Optional[str])
+        
+    Note: For virtual-to-virtual messaging, Twilio may return a message SID
+    even if status shows as "failed" on sender side. The message may still
+    be delivered on recipient side. Use status callbacks to track actual delivery.
     """
     client = get_twilio_client()
     if not client:
@@ -46,13 +51,28 @@ def send_sms(to_phone: str, message_body: str) -> Tuple[bool, Optional[str]]:
             return False, None
         
         print(f"Attempting to send SMS from {from_number} to {to_phone}...")
-        message = client.messages.create(
-            body=message_body,
-            from_=from_number,
-            to=to_phone
-        )
         
-        print(f"✓ SMS sent successfully! SID: {message.sid}")
+        # Build message parameters
+        message_params = {
+            "body": message_body,
+            "from_": from_number,
+            "to": to_phone
+        }
+        
+        # Add status callback if provided
+        # This allows us to track delivery status updates
+        if status_callback_url:
+            message_params["status_callback"] = status_callback_url
+        
+        message = client.messages.create(**message_params)
+        
+        # If we got a message SID, Twilio accepted the message
+        # For virtual-to-virtual, this means it was processed even if status shows differently
+        print(f"✓ SMS accepted by Twilio! SID: {message.sid}")
+        print(f"  Status: {message.status}")
+        print(f"  Note: For virtual-to-virtual numbers, status may show differently on each side")
+        print(f"  Use status callbacks to track actual delivery status")
+        
         return True, message.sid
     
     except Exception as e:
