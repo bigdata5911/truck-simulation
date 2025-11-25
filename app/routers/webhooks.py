@@ -16,6 +16,7 @@ from app.schemas import SamsaraWebhookPayload, TwilioInboundPayload
 from app.config import settings
 from app.services.event_detector import detect_event_transition, create_or_update_event
 from app.services.slack import send_slack_notification
+from app.services.twilio_service import send_sms
 import boto3
 import json
 from datetime import datetime, timedelta
@@ -98,7 +99,37 @@ async def samsara_webhook(
             )
             send_slack_notification(slack_message)
             
-            # Enqueue event to SQS for processing (SMS sending)
+            # Send SMS directly if driver has phone number (for testing/debugging)
+            # This bypasses SQS for immediate testing
+            if driver and driver.phone:
+                sms_body = (
+                    f"DriverBuddy: Vehicle {payload.vehicleId} stopped at "
+                    f"{payload.latitude:.4f},{payload.longitude:.4f} at {payload.timestamp.isoformat()}. "
+                    f"Reply to this SMS."
+                )
+                print(f"Attempting to send SMS directly to {driver.phone}...")
+                sms_success, twilio_sid = send_sms(driver.phone, sms_body)
+                
+                if sms_success:
+                    # Create message record
+                    message = Message(
+                        event_id=event.id,
+                        driver_id=driver.id,
+                        direction="outbound",
+                        body=sms_body,
+                        from_phone=settings.TWILIO_NUMBER,
+                        to_phone=driver.phone,
+                        status="sent",
+                        twilio_sid=twilio_sid
+                    )
+                    db.add(message)
+                    db.commit()
+                    print(f"✓ SMS sent directly and message record created")
+                else:
+                    print(f"✗ Failed to send SMS directly. Will try via SQS queue.")
+            
+            # Enqueue event to SQS for processing (SMS sending via worker)
+            # This is the production path, but we also send directly above for testing
             try:
                 queue_url = sqs.get_queue_url(QueueName=settings.SQS_EVENTS_QUEUE)['QueueUrl']
                 sqs.send_message(
@@ -112,9 +143,11 @@ async def samsara_webhook(
                         "timestamp": payload.timestamp.isoformat()
                     })
                 )
+                print(f"✓ Event enqueued to SQS for processing")
             except Exception as sqs_error:
                 # Log SQS error but don't fail the webhook
                 print(f"Warning: Could not send message to SQS: {sqs_error}")
+                print("  → SMS was sent directly above, but SQS processing will not happen")
             
         elif transition == "move_started" and current_open_event:
             # Update existing stop event with end_time

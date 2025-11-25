@@ -36,23 +36,37 @@ def send_sms(to_phone: str, message_body: str) -> Tuple[bool, Optional[str]]:
     """
     client = get_twilio_client()
     if not client:
+        print("Error: Twilio client not available. Check TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN")
         return False, None
     
     try:
         from_number = settings.TWILIO_NUMBER
         if not from_number:
-            print("Error: Twilio phone number not configured")
+            print("Error: Twilio phone number not configured. Set TWILIO_NUMBER environment variable")
             return False, None
         
+        print(f"Attempting to send SMS from {from_number} to {to_phone}...")
         message = client.messages.create(
             body=message_body,
             from_=from_number,
             to=to_phone
         )
         
+        print(f"✓ SMS sent successfully! SID: {message.sid}")
         return True, message.sid
     
     except Exception as e:
-        print(f"Error sending SMS via Twilio: {e}")
+        error_msg = str(e)
+        print(f"✗ Error sending SMS via Twilio: {error_msg}")
+        
+        # Provide helpful error messages
+        if "not verified" in error_msg.lower() or "unverified" in error_msg.lower():
+            print("  → Twilio trial accounts can only send to verified numbers.")
+            print("  → Verify the number in Twilio Console or upgrade your account.")
+        elif "invalid" in error_msg.lower() and "phone" in error_msg.lower():
+            print("  → Phone number format is invalid. Use E.164 format: +1234567890")
+        elif "insufficient" in error_msg.lower() or "balance" in error_msg.lower():
+            print("  → Twilio account has insufficient balance.")
+        
         return False, None
 
