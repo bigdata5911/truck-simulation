@@ -17,6 +17,7 @@ from app.config import settings
 from app.services.event_detector import detect_event_transition, create_or_update_event
 from app.services.slack import send_slack_notification
 import boto3
+import json
 from datetime import datetime, timedelta
 
 router = APIRouter()
@@ -86,19 +87,34 @@ async def samsara_webhook(
                 metadata=payload.metadata
             )
             
-            # Enqueue event to SQS for processing
-            queue_url = sqs.get_queue_url(QueueName=settings.SQS_EVENTS_QUEUE)['QueueUrl']
-            sqs.send_message(
-                QueueUrl=queue_url,
-                MessageBody=str({
-                    "event_id": event.id,
-                    "driver_id": driver.id if driver else None,
-                    "vehicle_id": payload.vehicleId,
-                    "latitude": float(payload.latitude),
-                    "longitude": float(payload.longitude),
-                    "timestamp": payload.timestamp.isoformat()
-                })
+            # Send Slack notification immediately (for testing/debugging)
+            driver_name = driver.name if driver else "Unknown"
+            driver_phone = driver.phone if driver else "N/A"
+            slack_message = (
+                f"🚛 Vehicle {payload.vehicleId} stopped\n"
+                f"Driver: {driver_name} ({driver_phone})\n"
+                f"Location: {payload.latitude:.4f}, {payload.longitude:.4f}\n"
+                f"Time: {payload.timestamp.isoformat()}"
             )
+            send_slack_notification(slack_message)
+            
+            # Enqueue event to SQS for processing (SMS sending)
+            try:
+                queue_url = sqs.get_queue_url(QueueName=settings.SQS_EVENTS_QUEUE)['QueueUrl']
+                sqs.send_message(
+                    QueueUrl=queue_url,
+                    MessageBody=json.dumps({
+                        "event_id": event.id,
+                        "driver_id": driver.id if driver else None,
+                        "vehicle_id": payload.vehicleId,
+                        "latitude": float(payload.latitude),
+                        "longitude": float(payload.longitude),
+                        "timestamp": payload.timestamp.isoformat()
+                    })
+                )
+            except Exception as sqs_error:
+                # Log SQS error but don't fail the webhook
+                print(f"Warning: Could not send message to SQS: {sqs_error}")
             
         elif transition == "move_started" and current_open_event:
             # Update existing stop event with end_time
