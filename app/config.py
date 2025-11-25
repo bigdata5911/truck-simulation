@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24 hours
     
     # CORS
-    CORS_ORIGINS: List[str] = ["*"]  # Change in production
+    CORS_ORIGINS: str = "*"  # Change in production
     
     # Vehicle state detection
     STOP_SPEED_THRESHOLD: float = 0.5  # km/h - vehicle is stopped if speed < this
